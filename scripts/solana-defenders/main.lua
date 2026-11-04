@@ -977,7 +977,7 @@ local function draw_over()
 
   g.text_center("Every transaction screened before the money moves.", W // 2, 184, g.MUTED)
   if state_t > 0.8 then
-    g.text_center("Press DOWN for more info about Range", W // 2, 214, g.WHITE)
+    g.text_center("DOWN Range info    " .. LA .. " Share score", W // 2, 214, g.WHITE)
   end
 end
 
@@ -1143,9 +1143,13 @@ function on_button(key, pressed)
     if key == "a" then set_state("play")
     elseif key == "b" then set_state("title") end
   elseif state == "over" then
-    if state_t > 0.8 and key == "down" then
-      qr_return = state
-      set_state("qr")
+    if state_t > 0.8 then
+      if key == "down" then
+        qr_return = state
+        set_state("qr")
+      elseif key == "a" then
+        open_share()
+      end
     end
   end
 end
