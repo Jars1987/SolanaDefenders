@@ -279,9 +279,12 @@ local function qr_penalty(m, size)
   return p + 10 * (math.ceil(math.abs(dark * 20 - total * 10) / total) - 1)
 end
 
--- Returns { size, rows } in the same shape as the generated QR table.
+-- Scoring the eight masks is most of the cost, which on the badge comes close to the
+-- 250 ms callback budget, so encoding is a job: qr_begin lays the symbol out and
+-- returns a step function that scores one mask per call, then returns
+-- { size, rows } in the same shape as the generated QR table.
 -- `force_mask` (0-7) skips mask selection; only tests pass it.
-local function qr_encode(text, force_mask)
+local function qr_begin(text, force_mask)
   local ver
   for v, s in ipairs(QR_L) do
     if 4 + (v < 10 and 8 or 16) + 8 * #text <= 8 * (s[1] - s[2] * s[3]) then
@@ -377,27 +380,33 @@ local function qr_encode(text, force_mask)
       end
     end
   end
-  local best_mask = force_mask
-  if not best_mask then
-    local best_p = math.huge
-    for mask = 0, 7 do
+  local mask, best_mask, best_p = 0, force_mask, math.huge
+  return function()
+    if not force_mask and mask <= 7 then
       apply(mask)
       format_bits(mask)
       local p = qr_penalty(m, size)
       if p < best_p then best_mask, best_p = mask, p end
       apply(mask)
+      mask = mask + 1
+      return nil
     end
+    apply(best_mask)
+    format_bits(best_mask)
+    local rows = {}
+    for y = 0, size - 1 do
+      local row = {}
+      for x = 0, size - 1 do row[x + 1] = m[y][x] and "1" or "0" end
+      rows[y + 1] = table.concat(row)
+    end
+    return { size = size, rows = rows }
   end
-  apply(best_mask)
-  format_bits(best_mask)
+end
 
-  local rows = {}
-  for y = 0, size - 1 do
-    local row = {}
-    for x = 0, size - 1 do row[x + 1] = m[y][x] and "1" or "0" end
-    rows[y + 1] = table.concat(row)
-  end
-  return { size = size, rows = rows }
+local function qr_encode(text, force_mask)
+  local step, q = qr_begin(text, force_mask), nil
+  repeat q = step() until q
+  return q
 end
 
 local function url_encode(s)
@@ -416,7 +425,7 @@ end
 local state, state_t = "title", 0
 local t = 0
 local state_since, qr_return = 0, "title"
-local share_qr, share_photo = nil, false
+local share_qr, share_job, share_photo = nil, nil, false
 local score, best, lives, wave = 0, 0, 3, 1
 local new_best = false
 local px, fire_cd = 0, 0
@@ -567,7 +576,15 @@ local function game_over()
     kv.set("best", tostring(best))
   end
   led_cd = t
+  share_qr, share_job = nil, qr_begin(share_url(score))
   set_state("over")
+end
+
+-- One mask per frame while the alert is up; done long before SELECT is accepted.
+local function step_share_qr()
+  if not share_job then return end
+  local q = share_job()
+  if q then share_qr, share_job = q, nil end
 end
 
 local function player_hit(kind, name)
@@ -1042,7 +1059,8 @@ local function draw_share()
 end
 
 local function open_share()
-  share_qr, share_photo = qr_encode(share_url(score)), false
+  while share_job do step_share_qr() end
+  share_photo = false
   set_state("share")
 end
 
@@ -1053,6 +1071,12 @@ function on_start()
   math.randomseed(string.unpack("<i4", badge.system.random_bytes(4)))
   for i = 1, 40 do
     stars[i] = { x = math.random(0, W - 1), y = math.random(0, H - 1), s = math.random(8, 30) }
+  end
+  -- The app store installs only .lua files, and without a manifest the launcher
+  -- shows the folder id, so the app writes its own on first run.
+  if not badge.storage.exists("app.ini") then
+    badge.storage.write("app.ini", "name=Solana Defenders\nauthor=Range\n"
+      .. "description=Screen out Solana threats. By Range.\nentry=main.lua\n")
   end
   led.take()
   best = tonumber(kv.get("best", "0")) or 0
@@ -1093,6 +1117,7 @@ function on_update(dt)
     if t >= led_cd then led.pulse(255, 0, 0, 500); led_cd = t + 0.8 end
   end
 
+  step_share_qr()
   update_effects(dt)
 end
 
